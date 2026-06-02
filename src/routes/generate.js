@@ -7,15 +7,23 @@ const router = express.Router();
  * POST /generate
  *
  * Body:
- *   text            string   — user story / spec / gherkin (plain text input)
- *   figma_url       string?  — Figma file/proto URL (alternative to text)
- *   screenshot_base64 string? — base64 image (alternative to text)
- *   context         object?  — { app_type, platform_hint, feature_id }
- *   stream          boolean? — if true, sends progress events as SSE
+ *   text              string    — user story / spec / gherkin
+ *   figma_url         string?   — Figma URL (alternative to text)
+ *   screenshot_base64 string?   — base64 image as primary input (alternative to text)
+ *   context           object?   — {
+ *                                   app_type,        // web | mobile_ios | ...
+ *                                   platform_hint,   // salesforce | generic | ...
+ *                                   feature_id,      // optional traceability ID
+ *                                   app_screenshots  // string | string[] — base64 screenshots
+ *                                                       of the APP UI (not input screenshots)
+ *                                                       used to extract field names, navigation etc.
+ *                                 }
+ *   stream            boolean?  — SSE streaming
  */
 router.post('/generate', async (req, res) => {
   const { text, figma_url, screenshot_base64, context = {}, stream = false } = req.body;
 
+  // Primary input (what to generate tests FROM)
   const rawInput = figma_url
     ? { figma_url }
     : screenshot_base64
@@ -23,7 +31,14 @@ router.post('/generate', async (req, res) => {
     : text;
 
   if (!rawInput) {
-    return res.status(400).json({ error: 'Provide text, figma_url, or screenshot_base64' });
+    return res.status(400).json({
+      error: 'Provide at least one of: text, figma_url, screenshot_base64',
+    });
+  }
+
+  // Normalize app_screenshots to array if provided as string
+  if (context.app_screenshots && typeof context.app_screenshots === 'string') {
+    context.app_screenshots = [context.app_screenshots];
   }
 
   if (stream) {
@@ -39,10 +54,6 @@ router.post('/generate', async (req, res) => {
   }
 });
 
-/**
- * Streams pipeline progress as Server-Sent Events.
- * UI can listen and show live stage updates.
- */
 async function runPipelineStreamed(rawInput, context, res) {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -57,7 +68,6 @@ async function runPipelineStreamed(rawInput, context, res) {
     const result = await runPipeline(rawInput, context, (progress) => {
       send('progress', progress);
     });
-
     send('result', result);
     res.end();
   } catch (err) {
